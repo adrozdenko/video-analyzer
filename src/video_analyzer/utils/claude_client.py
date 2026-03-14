@@ -1,60 +1,39 @@
-"""Claude client factory — supports OAuth (Max subscription) and API key."""
+"""Claude client factory — uses OAuth token from macOS Keychain (Max subscription)."""
 
 from __future__ import annotations
 
 import anthropic
 
-from video_analyzer.utils.keychain import OAUTH_BETA_HEADERS, SETUP_TOKEN_PREFIX, read_keychain_token
+from video_analyzer.utils.keychain import OAUTH_BETA_HEADERS, read_keychain_token
 
 
-def create_claude_client(api_key: str = "") -> tuple[anthropic.Anthropic, str]:
-    """Create an Anthropic client with the best available auth method.
-
-    Priority:
-    1. Keychain OAuth token (Claude Max subscription — free)
-    2. Explicit API key (paid per-token)
-
-    Returns (client, auth_method) tuple.
-    """
-    # Try keychain first (Max subscription)
-    keychain_token = read_keychain_token()
-    if keychain_token:
-        client = anthropic.Anthropic(
-            api_key=None,
-            auth_token=keychain_token,
-            default_headers=OAUTH_BETA_HEADERS,
+def create_claude_client() -> anthropic.Anthropic:
+    """Create an Anthropic client using OAuth token from macOS Keychain."""
+    token = read_keychain_token()
+    if not token:
+        raise ValueError(
+            "No Claude OAuth token found in macOS Keychain.\n"
+            "Log in to Claude Code CLI first: `claude auth login`"
         )
-        return client, "oauth-max"
 
-    # Fall back to API key
-    if api_key:
-        client = anthropic.Anthropic(api_key=api_key)
-        return client, "api-key"
-
-    raise ValueError(
-        "No Claude credentials found. Either:\n"
-        "  1. Log in to Claude Code CLI (`claude auth login`) for Max subscription access\n"
-        "  2. Set ANTHROPIC_API_KEY in .env for paid API access"
+    return anthropic.Anthropic(
+        api_key=None,
+        auth_token=token,
+        default_headers=OAUTH_BETA_HEADERS,
     )
 
 
-def create_async_claude_client(api_key: str = "") -> tuple[anthropic.AsyncAnthropic, str]:
-    """Async version of create_claude_client."""
-    keychain_token = read_keychain_token()
-    if keychain_token:
-        client = anthropic.AsyncAnthropic(
-            api_key=None,
-            auth_token=keychain_token,
-            default_headers=OAUTH_BETA_HEADERS,
+def create_async_claude_client() -> anthropic.AsyncAnthropic:
+    """Async version — uses OAuth token from macOS Keychain."""
+    token = read_keychain_token()
+    if not token:
+        raise ValueError(
+            "No Claude OAuth token found in macOS Keychain.\n"
+            "Log in to Claude Code CLI first: `claude auth login`"
         )
-        return client, "oauth-max"
 
-    if api_key:
-        client = anthropic.AsyncAnthropic(api_key=api_key)
-        return client, "api-key"
-
-    raise ValueError(
-        "No Claude credentials found. Either:\n"
-        "  1. Log in to Claude Code CLI (`claude auth login`) for Max subscription access\n"
-        "  2. Set ANTHROPIC_API_KEY in .env for paid API access"
+    return anthropic.AsyncAnthropic(
+        api_key=None,
+        auth_token=token,
+        default_headers=OAUTH_BETA_HEADERS,
     )

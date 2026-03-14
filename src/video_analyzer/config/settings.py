@@ -26,9 +26,6 @@ class Settings(BaseSettings):
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
-    # API keys
-    anthropic_api_key: str = Field(default="", description="Anthropic API key for Claude vision")
-
     # Whisper
     whisper_model: WhisperModel = WhisperModel.MEDIUM
 

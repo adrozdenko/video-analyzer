@@ -126,7 +126,6 @@ class Pipeline:
                 vision_result = asyncio.run(
                     vision_analyzer.analyze(
                         kf_result.data,
-                        self.settings.anthropic_api_key,
                         self.settings.vision_concurrency,
                     )
                 )
@@ -153,37 +152,8 @@ class Pipeline:
             task_sum = progress.add_task("Generating summary...", total=None)
             output_fmt = OutputFormat(self.settings.output_format)
 
-            try:
-                summarizer = Summarizer(self.settings.anthropic_api_key)
-                summary_result = summarizer.summarize(meta, timeline_result.data, output_fmt)
-            except ValueError:
-                # No credentials at all — produce fallback raw timeline
-                from video_analyzer.stages.summarize import _fmt_time
-
-                lines = [f"# Video Analysis: {meta.path.name}"]
-                lines.append(f"\nDuration: {meta.duration_seconds:.0f}s | {meta.width}x{meta.height}\n")
-                lines.append("## Timeline\n")
-                for entry in timeline_result.data:
-                    ts = _fmt_time(entry.timestamp)
-                    lines.append(f"### [{ts}]")
-                    if entry.transcript:
-                        lines.append(f"**Speech:** {entry.transcript}")
-                    if entry.visual:
-                        lines.append(f"**Visual:** {entry.visual}")
-                    lines.append("")
-                lines.append("---\n*No Claude credentials — showing raw timeline*")
-
-                summary_result = StageResult.success(
-                    stage="summarizer",
-                    data=AnalysisSummary(
-                        video=meta,
-                        timeline=timeline_result.data,
-                        summary_text="\n".join(lines),
-                        transcript_segments=sum(1 for e in timeline_result.data if e.transcript),
-                        keyframes_analyzed=sum(1 for e in timeline_result.data if e.visual),
-                        format=output_fmt,
-                    ),
-                )
+            summarizer = Summarizer()
+            summary_result = summarizer.summarize(meta, timeline_result.data, output_fmt)
 
             self._log_stage(progress, task_sum, "Summary", summary_result)
 

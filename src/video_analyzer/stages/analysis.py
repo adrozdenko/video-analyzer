@@ -103,16 +103,12 @@ class VisionAnalyzer:
     async def analyze(
         self,
         keyframes: list[Keyframe],
-        api_key: str = "",
         concurrency: int = 3,
     ) -> StageResult[list[VisualDescription]]:
-        """Analyze keyframes using Claude vision.
-
-        Auth priority: macOS Keychain OAuth (Max subscription) > API key.
+        """Analyze keyframes using Claude vision via OAuth (Max subscription).
 
         Args:
             keyframes: Extracted video keyframes with image paths.
-            api_key: Optional Anthropic API key (fallback if no keychain token).
             concurrency: Maximum parallel API calls.
 
         Returns:
@@ -126,8 +122,7 @@ class VisionAnalyzer:
 
         start = time.perf_counter()
         try:
-            client, auth_method = create_async_claude_client(api_key)
-            logger.info("Vision analyzer using auth: %s", auth_method)
+            client = create_async_claude_client()
         except ValueError as e:
             return StageResult.fail(
                 stage=STAGE_VISION,
