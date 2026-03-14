@@ -14,13 +14,14 @@ from video_analyzer.types import (
     TimelineEntry,
     VideoMetadata,
 )
+from video_analyzer.utils.claude_client import create_claude_client
 
 
 class Summarizer:
     """Generates a structured summary from the unified timeline."""
 
-    def __init__(self, api_key: str):
-        self._client = anthropic.Anthropic(api_key=api_key)
+    def __init__(self, api_key: str = ""):
+        self._client, self._auth_method = create_claude_client(api_key)
 
     def summarize(
         self,

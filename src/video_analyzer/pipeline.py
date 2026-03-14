@@ -121,7 +121,7 @@ class Pipeline:
             self._log_stage(progress, task_tr, "Transcript", transcript_result)
 
             task_vis = progress.add_task("Analyzing keyframes (Claude)...", total=None)
-            if kf_result.ok and kf_result.data and self.settings.anthropic_api_key:
+            if kf_result.ok and kf_result.data:
                 vision_analyzer = VisionAnalyzer()
                 vision_result = asyncio.run(
                     vision_analyzer.analyze(
@@ -129,10 +129,6 @@ class Pipeline:
                         self.settings.anthropic_api_key,
                         self.settings.vision_concurrency,
                     )
-                )
-            elif not self.settings.anthropic_api_key:
-                vision_result = StageResult.skipped(
-                    stage="vision_analyzer", reason="No ANTHROPIC_API_KEY configured"
                 )
             else:
                 vision_result = StageResult.skipped(
@@ -157,11 +153,11 @@ class Pipeline:
             task_sum = progress.add_task("Generating summary...", total=None)
             output_fmt = OutputFormat(self.settings.output_format)
 
-            if self.settings.anthropic_api_key:
+            try:
                 summarizer = Summarizer(self.settings.anthropic_api_key)
                 summary_result = summarizer.summarize(meta, timeline_result.data, output_fmt)
-            else:
-                # No API key — produce fallback raw timeline summary
+            except ValueError:
+                # No credentials at all — produce fallback raw timeline
                 from video_analyzer.stages.summarize import _fmt_time
 
                 lines = [f"# Video Analysis: {meta.path.name}"]
@@ -175,9 +171,8 @@ class Pipeline:
                     if entry.visual:
                         lines.append(f"**Visual:** {entry.visual}")
                     lines.append("")
-                lines.append("---\n*No ANTHROPIC_API_KEY — showing raw timeline*")
+                lines.append("---\n*No Claude credentials — showing raw timeline*")
 
-                from video_analyzer.types import AnalysisSummary
                 summary_result = StageResult.success(
                     stage="summarizer",
                     data=AnalysisSummary(

@@ -18,6 +18,7 @@ from video_analyzer.types import (
     TranscriptSegment,
     VisualDescription,
 )
+from video_analyzer.utils.claude_client import create_async_claude_client
 
 logger = logging.getLogger(__name__)
 
@@ -102,14 +103,16 @@ class VisionAnalyzer:
     async def analyze(
         self,
         keyframes: list[Keyframe],
-        api_key: str,
+        api_key: str = "",
         concurrency: int = 3,
     ) -> StageResult[list[VisualDescription]]:
         """Analyze keyframes using Claude vision.
 
+        Auth priority: macOS Keychain OAuth (Max subscription) > API key.
+
         Args:
             keyframes: Extracted video keyframes with image paths.
-            api_key: Anthropic API key.
+            api_key: Optional Anthropic API key (fallback if no keychain token).
             concurrency: Maximum parallel API calls.
 
         Returns:
@@ -122,7 +125,15 @@ class VisionAnalyzer:
             )
 
         start = time.perf_counter()
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        try:
+            client, auth_method = create_async_claude_client(api_key)
+            logger.info("Vision analyzer using auth: %s", auth_method)
+        except ValueError as e:
+            return StageResult.fail(
+                stage=STAGE_VISION,
+                error=str(e),
+                duration_ms=(time.perf_counter() - start) * 1000,
+            )
         semaphore = asyncio.Semaphore(concurrency)
 
         async def _analyze_one(keyframe: Keyframe) -> VisualDescription | None:
