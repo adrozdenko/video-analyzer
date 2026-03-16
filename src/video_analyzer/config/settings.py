@@ -17,6 +17,11 @@ class WhisperModel(str, Enum):
     LARGE = "large"
 
 
+class DetailMode(str, Enum):
+    SUMMARY = "summary"
+    DETAILED = "detailed"
+
+
 class VisionProvider(str, Enum):
     CLAUDE = "claude"
 
@@ -41,6 +46,7 @@ class Settings(BaseSettings):
 
     # Output
     output_format: str = "md"
+    detail_mode: DetailMode = DetailMode.SUMMARY
     verbose: bool = False
 
 

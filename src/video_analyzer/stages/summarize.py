@@ -7,6 +7,7 @@ import time
 
 import anthropic
 
+from video_analyzer.config.settings import DetailMode
 from video_analyzer.types import (
     AnalysisSummary,
     OutputFormat,
@@ -28,6 +29,7 @@ class Summarizer:
         video: VideoMetadata,
         timeline: list[TimelineEntry],
         output_format: OutputFormat = OutputFormat.MARKDOWN,
+        detail_mode: DetailMode = DetailMode.SUMMARY,
     ) -> StageResult[AnalysisSummary]:
         start = time.perf_counter()
 
@@ -45,7 +47,7 @@ class Summarizer:
         timeline_text = self._format_timeline_for_prompt(timeline)
 
         try:
-            summary_text = self._call_claude(video, timeline_text, output_format)
+            summary_text = self._call_claude(video, timeline_text, output_format, detail_mode)
         except Exception as e:
             # Fallback: produce raw timeline as output
             summary_text = self._fallback_summary(video, timeline, output_format)
@@ -87,6 +89,7 @@ class Summarizer:
         video: VideoMetadata,
         timeline_text: str,
         output_format: OutputFormat,
+        detail_mode: DetailMode = DetailMode.SUMMARY,
     ) -> str:
         format_instruction = {
             OutputFormat.MARKDOWN: "Format your response as clean Markdown with headers.",
@@ -94,9 +97,35 @@ class Summarizer:
             OutputFormat.TEXT: "Format your response as plain text with clear sections.",
         }[output_format]
 
-        prompt = f"""Analyze this video timeline and produce a comprehensive summary.
+        video_info = f"Video info: {video.duration_seconds:.0f}s duration, {video.width}x{video.height}, {video.codec}"
 
-Video info: {video.duration_seconds:.0f}s duration, {video.width}x{video.height}, {video.codec}
+        if detail_mode == DetailMode.DETAILED:
+            prompt = f"""Analyze this video timeline and extract ALL knowledge in exhaustive detail.
+
+{video_info}
+
+Timeline (timestamp | speech/visual content):
+{timeline_text}
+
+Extract EVERYTHING from this video with maximum detail. Include:
+
+1. **Overview** — What is this video about, who is presenting, what is the context
+2. **Full Transcript** — Complete reconstructed transcript organized by timestamp, preserving the speaker's exact words and arguments as closely as possible
+3. **Key Arguments & Ideas** — Every distinct argument, claim, or idea presented, with supporting details and reasoning
+4. **Technical Details** — Any specific technologies, frameworks, architectures, patterns, or concepts mentioned, with the presenter's opinion on each
+5. **Visual Content** — Detailed description of everything shown visually: diagrams, whiteboard drawings, code, slides, UI elements, gestures
+6. **Actionable Takeaways** — Concrete advice, recommendations, or principles the presenter communicates
+7. **Timeline Breakdown** — Second-by-second breakdown of what happens and what is said at each point
+8. **Quotes** — All notable direct quotes with timestamps
+
+Be exhaustive. Include every detail. Do NOT summarize or condense — extract ALL information.
+
+{format_instruction}"""
+            max_tokens = 8000
+        else:
+            prompt = f"""Analyze this video timeline and produce a comprehensive summary.
+
+{video_info}
 
 Timeline (timestamp | speech/visual content):
 {timeline_text}
@@ -108,10 +137,11 @@ Create a summary with these sections:
 4. **Transcript Highlights** — Key spoken content
 
 {format_instruction}"""
+            max_tokens = 1500
 
         message = self._client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=1500,
+            max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
 

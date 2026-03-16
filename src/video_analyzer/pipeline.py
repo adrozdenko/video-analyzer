@@ -153,7 +153,9 @@ class Pipeline:
             output_fmt = OutputFormat(self.settings.output_format)
 
             summarizer = Summarizer()
-            summary_result = summarizer.summarize(meta, timeline_result.data, output_fmt)
+            summary_result = summarizer.summarize(
+                meta, timeline_result.data, output_fmt, self.settings.detail_mode
+            )
 
             self._log_stage(progress, task_sum, "Summary", summary_result)
 

@@ -10,7 +10,7 @@ from typing import Annotated, Optional
 import typer
 from rich.console import Console
 
-from video_analyzer.config.settings import WhisperModel, load_settings
+from video_analyzer.config.settings import DetailMode, WhisperModel, load_settings
 from video_analyzer.pipeline import Pipeline
 
 app = typer.Typer(
@@ -29,6 +29,7 @@ def analyze(
     scene_threshold: Annotated[float, typer.Option(help="Scene detection threshold (0.05-0.9)")] = 0.3,
     max_keyframes: Annotated[int, typer.Option(help="Maximum keyframes to extract")] = 20,
     whisper_model: Annotated[str, typer.Option(help="Whisper model: tiny, base, small, medium, large")] = "medium",
+    detail: Annotated[bool, typer.Option("--detail", "-d", help="Exhaustive knowledge extraction instead of summary")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Show cost estimate without running")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
 ) -> None:
@@ -43,6 +44,7 @@ def analyze(
         max_keyframes=max_keyframes,
         whisper_model=WhisperModel(whisper_model),
         output_format=format,
+        detail_mode=DetailMode.DETAILED if detail else DetailMode.SUMMARY,
         verbose=verbose,
     )
 
