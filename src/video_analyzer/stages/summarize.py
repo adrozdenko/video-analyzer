@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import time
 
-import anthropic
-
 from video_analyzer.config.settings import DetailMode
 from video_analyzer.types import (
     AnalysisSummary,
@@ -15,14 +13,11 @@ from video_analyzer.types import (
     TimelineEntry,
     VideoMetadata,
 )
-from video_analyzer.utils.claude_client import create_claude_client
+from video_analyzer.utils.claude_cli import call_claude_sync
 
 
 class Summarizer:
     """Generates a structured summary from the unified timeline."""
-
-    def __init__(self):
-        self._client = create_claude_client()
 
     def summarize(
         self,
@@ -193,7 +188,6 @@ Extract EVERYTHING from this video with maximum detail. Include:
 Be exhaustive. Include every detail. Do NOT summarize or condense — extract ALL information.
 
 {format_instruction}"""
-            max_tokens = 8000
         else:
             prompt = f"""Analyze this video timeline and produce a comprehensive summary.
 
@@ -208,16 +202,11 @@ Create a summary with these sections:
 3. **Visual Content** — What was shown visually
 4. **Transcript Highlights** — Key spoken content
 
+Be concise. No extra commentary beyond what is asked.
+
 {format_instruction}"""
-            max_tokens = 1500
 
-        message = self._client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        return message.content[0].text
+        return call_claude_sync(prompt, model="haiku")
 
     def _fallback_summary(
         self,

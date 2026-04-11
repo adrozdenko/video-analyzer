@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import time
 from pathlib import Path
 
-import anthropic
 import whisper
 
 from video_analyzer.types import (
@@ -18,7 +16,7 @@ from video_analyzer.types import (
     TranscriptSegment,
     VisualDescription,
 )
-from video_analyzer.utils.claude_client import create_async_claude_client
+from video_analyzer.utils.claude_cli import call_claude_async, get_claude_cli_path
 
 logger = logging.getLogger(__name__)
 
@@ -121,19 +119,17 @@ class VisionAnalyzer:
             )
 
         start = time.perf_counter()
-        try:
-            client = create_async_claude_client()
-        except ValueError as e:
+        if not get_claude_cli_path():
             return StageResult.fail(
                 stage=STAGE_VISION,
-                error=str(e),
+                error="Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code",
                 duration_ms=(time.perf_counter() - start) * 1000,
             )
         semaphore = asyncio.Semaphore(concurrency)
 
         async def _analyze_one(keyframe: Keyframe) -> VisualDescription | None:
             async with semaphore:
-                return await self._describe_keyframe(client, keyframe)
+                return await self._describe_keyframe(keyframe)
 
         tasks = [_analyze_one(kf) for kf in keyframes]
         raw_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -184,10 +180,9 @@ class VisionAnalyzer:
 
     async def _describe_keyframe(
         self,
-        client: anthropic.AsyncAnthropic,
         keyframe: Keyframe,
     ) -> VisualDescription | None:
-        """Send a single keyframe to Claude for description.
+        """Send a single keyframe to Claude for description via CLI.
 
         Returns None if the image file is unreadable.
         """
@@ -195,49 +190,19 @@ class VisionAnalyzer:
             logger.warning("Keyframe image not found: %s", keyframe.path)
             return None
 
-        image_bytes = keyframe.path.read_bytes()
-        if not image_bytes:
+        if keyframe.path.stat().st_size == 0:
             logger.warning("Keyframe image is empty: %s", keyframe.path)
             return None
 
-        base64_data = base64.b64encode(image_bytes).decode("utf-8")
+        prompt = f"Use the Read tool to view the image at {keyframe.path}. Then analyze it."
 
-        # Detect media type from extension
-        suffix = keyframe.path.suffix.lower()
-        media_type_map = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-        }
-        media_type = media_type_map.get(suffix, "image/jpeg")
-
-        message = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=300,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": base64_data,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": VISION_PROMPT,
-                        },
-                    ],
-                }
-            ],
+        raw_text = await call_claude_async(
+            prompt,
+            system_prompt=VISION_PROMPT,
+            model="haiku",
+            tools="Read",
         )
 
-        raw_text = message.content[0].text
         return self._parse_vision_response(raw_text, keyframe)
 
     @staticmethod
