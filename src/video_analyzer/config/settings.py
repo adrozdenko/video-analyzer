@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     keyframe_max_width: int = Field(default=1024, ge=256, le=4096)
     fallback_interval_seconds: float = Field(default=5.0, ge=1.0)
 
+    # Pipeline mode
+    audio_only: bool = False
+
     # Output
     output_format: str = "md"
     detail_mode: DetailMode = DetailMode.SUMMARY

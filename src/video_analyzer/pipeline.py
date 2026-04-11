@@ -87,25 +87,29 @@ class Pipeline:
             progress.update(task, description=f"[green]Probed: {meta.duration_seconds:.0f}s, {meta.width}x{meta.height}")
             progress.remove_task(task)
 
-            # Stage 2: Extract audio + keyframes in parallel
+            # Stage 2: Extract audio + keyframes (keyframes skipped in audio-only mode)
             task_audio = progress.add_task("Extracting audio...", total=None)
-            task_kf = progress.add_task("Extracting keyframes...", total=None)
 
             audio_extractor = AudioExtractor()
-            kf_extractor = KeyframeExtractor()
-
             audio_result = audio_extractor.extract(video_path, self._tmp_dir)
             self._log_stage(progress, task_audio, "Audio", audio_result)
 
-            kf_result = kf_extractor.extract(
-                video_path,
-                self._tmp_dir,
-                threshold=self.settings.scene_threshold,
-                max_keyframes=self.settings.max_keyframes,
-                max_width=self.settings.keyframe_max_width,
-                fallback_interval=self.settings.fallback_interval_seconds,
-            )
-            self._log_stage(progress, task_kf, "Keyframes", kf_result)
+            if self.settings.audio_only:
+                kf_result = StageResult.skipped(
+                    stage="keyframe_extraction", reason="Audio-only mode"
+                )
+            else:
+                task_kf = progress.add_task("Extracting keyframes...", total=None)
+                kf_extractor = KeyframeExtractor()
+                kf_result = kf_extractor.extract(
+                    video_path,
+                    self._tmp_dir,
+                    threshold=self.settings.scene_threshold,
+                    max_keyframes=self.settings.max_keyframes,
+                    max_width=self.settings.keyframe_max_width,
+                    fallback_interval=self.settings.fallback_interval_seconds,
+                )
+                self._log_stage(progress, task_kf, "Keyframes", kf_result)
 
             # Stage 3: Transcribe + Vision analyze
             task_tr = progress.add_task("Transcribing audio (Whisper)...", total=None)
