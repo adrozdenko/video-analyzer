@@ -54,6 +54,7 @@ class TimelineMerger:
                         transcript=seg.text,
                         visual=matched_visual.description if matched_visual else None,
                         objects=matched_visual.objects if matched_visual else [],
+                        text_detected=matched_visual.text_detected if matched_visual else None,
                     )
                 )
 
@@ -71,6 +72,7 @@ class TimelineMerger:
                             timestamp=v.timestamp,
                             visual=v.description,
                             objects=v.objects,
+                            text_detected=v.text_detected,
                         )
                     )
         else:
@@ -81,6 +83,7 @@ class TimelineMerger:
                         timestamp=v.timestamp,
                         visual=v.description,
                         objects=v.objects,
+                        text_detected=v.text_detected,
                     )
                 )
 

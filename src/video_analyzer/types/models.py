@@ -98,6 +98,7 @@ class TimelineEntry(BaseModel):
     transcript: str | None = None
     visual: str | None = None
     objects: list[str] = Field(default_factory=list)
+    text_detected: str | None = None
 
 
 # --- Output ---

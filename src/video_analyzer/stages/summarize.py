@@ -58,6 +58,8 @@ class Summarizer:
                     duration_ms=(time.perf_counter() - start) * 1000,
                 )
 
+        summary_text = self._append_timeline_appendix(summary_text, timeline, output_format)
+
         result = AnalysisSummary(
             video=video,
             timeline=timeline,
@@ -81,8 +83,78 @@ class Summarizer:
                 parts.append(f"Visual: {entry.visual}")
             if entry.objects:
                 parts.append(f"Objects: {', '.join(entry.objects)}")
+            if entry.text_detected:
+                parts.append(f"On-screen text: {entry.text_detected}")
             lines.append(" | ".join(parts))
         return "\n".join(lines)
+
+    def _append_timeline_appendix(
+        self,
+        summary_text: str,
+        timeline: list[TimelineEntry],
+        output_format: OutputFormat,
+    ) -> str:
+        """Append raw timeline evidence so visual analysis is always surfaced."""
+        if output_format == OutputFormat.JSON:
+            return self._append_json_timeline(summary_text, timeline)
+        if output_format == OutputFormat.TEXT:
+            return summary_text.rstrip() + "\n\n" + self._render_text_timeline_appendix(timeline)
+        return summary_text.rstrip() + "\n\n" + self._render_markdown_timeline_appendix(timeline)
+
+    def _append_json_timeline(self, summary_text: str, timeline: list[TimelineEntry]) -> str:
+        try:
+            payload = json.loads(summary_text)
+        except json.JSONDecodeError:
+            payload = {"summary": summary_text}
+
+        payload["timeline_evidence"] = [
+            {
+                "timestamp": _fmt_time(entry.timestamp),
+                "end_timestamp": _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None,
+                "transcript": entry.transcript,
+                "visual": entry.visual,
+                "objects": entry.objects,
+                "text_detected": entry.text_detected,
+            }
+            for entry in timeline
+        ]
+        return json.dumps(payload, indent=2)
+
+    def _render_markdown_timeline_appendix(self, timeline: list[TimelineEntry]) -> str:
+        lines = ["## Timeline Evidence", ""]
+        for entry in timeline:
+            ts = _fmt_time(entry.timestamp)
+            end_ts = _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None
+            heading = f"### [{ts}-{end_ts}]" if end_ts else f"### [{ts}]"
+            lines.append(heading)
+            if entry.transcript:
+                lines.append(f"**Speech:** {entry.transcript}")
+            if entry.visual:
+                lines.append(f"**Visual:** {entry.visual}")
+            if entry.objects:
+                lines.append(f"**Objects:** {', '.join(entry.objects)}")
+            if entry.text_detected:
+                lines.append(f"**On-screen text:** {entry.text_detected}")
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    def _render_text_timeline_appendix(self, timeline: list[TimelineEntry]) -> str:
+        lines = ["Timeline Evidence", "=================", ""]
+        for entry in timeline:
+            ts = _fmt_time(entry.timestamp)
+            end_ts = _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None
+            heading = f"[{ts}-{end_ts}]" if end_ts else f"[{ts}]"
+            lines.append(heading)
+            if entry.transcript:
+                lines.append(f"Speech: {entry.transcript}")
+            if entry.visual:
+                lines.append(f"Visual: {entry.visual}")
+            if entry.objects:
+                lines.append(f"Objects: {', '.join(entry.objects)}")
+            if entry.text_detected:
+                lines.append(f"On-screen text: {entry.text_detected}")
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
     def _call_claude(
         self,
@@ -140,7 +212,7 @@ Create a summary with these sections:
             max_tokens = 1500
 
         message = self._client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-haiku-4-5-20251001",
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -183,6 +255,8 @@ Create a summary with these sections:
                 lines.append(f"**Visual:** {entry.visual}")
             if entry.objects:
                 lines.append(f"**Objects:** {', '.join(entry.objects)}")
+            if entry.text_detected:
+                lines.append(f"**On-screen text:** {entry.text_detected}")
             lines.append("")
 
         lines.append("\n---\n*AI summarization unavailable — raw timeline data*")
