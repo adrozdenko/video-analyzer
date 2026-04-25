@@ -11,11 +11,11 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 from video_analyzer.config.settings import Settings
-from video_analyzer.stages.analysis import Transcriber, VisionAnalyzer
-from video_analyzer.stages.extraction import AudioExtractor, KeyframeExtractor, probe_video
-from video_analyzer.stages.merge import TimelineMerger
-from video_analyzer.stages.summarize import Summarizer
-from video_analyzer.types import AnalysisSummary, Keyframe, OutputFormat, StageResult, VideoMetadata
+from video_analyzer.stages.analysis import analyze_keyframes, transcribe
+from video_analyzer.stages.extraction import extract_audio, extract_keyframes, probe_video
+from video_analyzer.stages.merge import merge_timeline
+from video_analyzer.stages.summarize import summarize
+from video_analyzer.types import AnalysisSummary, OutputFormat, StageResult
 
 console = Console()
 
@@ -30,11 +30,15 @@ class Pipeline:
     def run(self, video_path: Path) -> StageResult[AnalysisSummary]:
         """Run the full pipeline synchronously (uses asyncio internally for vision)."""
         self._tmp_dir = Path(tempfile.mkdtemp(prefix="video_analyzer_"))
-
         try:
             return self._execute(video_path)
         finally:
-            self._cleanup()
+            self.cleanup()
+
+    def cleanup(self) -> None:
+        if self._tmp_dir and self._tmp_dir.exists():
+            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+        self._tmp_dir = None
 
     def dry_run(self, video_path: Path) -> None:
         """Show what would happen without running the pipeline."""
@@ -53,21 +57,19 @@ class Pipeline:
         console.print(f"  Scene threshold: {self.settings.scene_threshold}")
         console.print(f"  Max keyframes: {self.settings.max_keyframes}")
 
-        # Estimate keyframes (rough: 1 scene change per 10s for typical video)
         est_keyframes = min(
             int(meta.duration_seconds / 10), self.settings.max_keyframes
         )
-        # Claude vision: ~$0.004 per 1024px image (sonnet)
-        est_vision_cost = est_keyframes * 0.004
-        # Claude summarization: ~$0.003
-        est_summary_cost = 0.003
+        # Cost estimates assume haiku ($0.0008/image, $0.0003 summary at typical input size).
+        est_vision_cost = est_keyframes * 0.0008
+        est_summary_cost = 0.0003
         total = est_vision_cost + est_summary_cost
 
         console.print(f"\n  Estimated keyframes: ~{est_keyframes}")
         console.print(f"  Transcription cost: $0.00 (local Whisper)")
-        console.print(f"  Vision cost: ~${est_vision_cost:.3f} ({est_keyframes} frames)")
-        console.print(f"  Summarization cost: ~${est_summary_cost:.3f}")
-        console.print(f"  [bold]Total estimated: ~${total:.3f}[/bold]\n")
+        console.print(f"  Vision cost: ~${est_vision_cost:.4f} ({est_keyframes} frames)")
+        console.print(f"  Summarization cost: ~${est_summary_cost:.4f}")
+        console.print(f"  [bold]Total estimated: ~${total:.4f}[/bold]\n")
 
     def _execute(self, video_path: Path) -> StageResult[AnalysisSummary]:
         with Progress(
@@ -77,21 +79,20 @@ class Pipeline:
             console=console,
         ) as progress:
 
-            # Stage 1: Probe
             task = progress.add_task("Probing video...", total=None)
             probe = probe_video(video_path)
             if not probe.ok:
                 progress.update(task, description=f"[red]Probe failed: {probe.error}")
                 return StageResult.fail(stage="pipeline", error=f"Probe failed: {probe.error}")
             meta = probe.data
-            progress.update(task, description=f"[green]Probed: {meta.duration_seconds:.0f}s, {meta.width}x{meta.height}")
+            progress.update(
+                task,
+                description=f"[green]Probed: {meta.duration_seconds:.0f}s, {meta.width}x{meta.height}",
+            )
             progress.remove_task(task)
 
-            # Stage 2: Extract audio + keyframes (keyframes skipped in audio-only mode)
             task_audio = progress.add_task("Extracting audio...", total=None)
-
-            audio_extractor = AudioExtractor()
-            audio_result = audio_extractor.extract(video_path, self._tmp_dir)
+            audio_result = extract_audio(video_path, self._tmp_dir)
             self._log_stage(progress, task_audio, "Audio", audio_result)
 
             if self.settings.audio_only:
@@ -100,8 +101,7 @@ class Pipeline:
                 )
             else:
                 task_kf = progress.add_task("Extracting keyframes...", total=None)
-                kf_extractor = KeyframeExtractor()
-                kf_result = kf_extractor.extract(
+                kf_result = extract_keyframes(
                     video_path,
                     self._tmp_dir,
                     threshold=self.settings.scene_threshold,
@@ -111,39 +111,32 @@ class Pipeline:
                 )
                 self._log_stage(progress, task_kf, "Keyframes", kf_result)
 
-            # Stage 3: Transcribe + Vision analyze
             task_tr = progress.add_task("Transcribing audio (Whisper)...", total=None)
-            transcriber = Transcriber()
             if audio_result.ok:
-                transcript_result = transcriber.transcribe(
+                transcript_result = transcribe(
                     audio_result.data, self.settings.whisper_model.value
                 )
             else:
                 transcript_result = StageResult.skipped(
-                    stage="transcriber", reason=f"No audio: {audio_result.error or 'skipped'}"
+                    stage="transcribe",
+                    reason=f"No audio: {audio_result.error or 'skipped'}",
                 )
             self._log_stage(progress, task_tr, "Transcript", transcript_result)
 
             task_vis = progress.add_task("Analyzing keyframes (Claude)...", total=None)
             if kf_result.ok and kf_result.data:
-                vision_analyzer = VisionAnalyzer()
                 vision_result = asyncio.run(
-                    vision_analyzer.analyze(
-                        kf_result.data,
-                        self.settings.vision_concurrency,
-                    )
+                    analyze_keyframes(kf_result.data, self.settings.vision_concurrency)
                 )
             else:
                 vision_result = StageResult.skipped(
-                    stage="vision_analyzer",
+                    stage="vision_analysis",
                     reason=f"No keyframes: {kf_result.error or 'skipped'}",
                 )
             self._log_stage(progress, task_vis, "Vision", vision_result)
 
-            # Stage 4: Merge timeline
             task_merge = progress.add_task("Merging timeline...", total=None)
-            merger = TimelineMerger()
-            timeline_result = merger.merge(transcript_result, vision_result)
+            timeline_result = merge_timeline(transcript_result, vision_result)
             self._log_stage(progress, task_merge, "Timeline", timeline_result)
 
             if not timeline_result.ok:
@@ -152,15 +145,11 @@ class Pipeline:
                     error=f"Timeline merge failed: {timeline_result.error}",
                 )
 
-            # Stage 5: Summarize
             task_sum = progress.add_task("Generating summary...", total=None)
             output_fmt = OutputFormat(self.settings.output_format)
-
-            summarizer = Summarizer()
-            summary_result = summarizer.summarize(
+            summary_result = summarize(
                 meta, timeline_result.data, output_fmt, self.settings.detail_mode
             )
-
             self._log_stage(progress, task_sum, "Summary", summary_result)
 
         return summary_result
@@ -182,7 +171,3 @@ class Pipeline:
         else:
             progress.update(task_id, description=f"[red]{name}: failed — {result.error}")
         progress.remove_task(task_id)
-
-    def _cleanup(self) -> None:
-        if self._tmp_dir and self._tmp_dir.exists():
-            shutil.rmtree(self._tmp_dir, ignore_errors=True)

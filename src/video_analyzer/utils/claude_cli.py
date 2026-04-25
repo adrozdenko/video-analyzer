@@ -7,6 +7,7 @@ which handles its own authentication. No more expired tokens.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import subprocess
@@ -14,21 +15,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_cached_cli_path: str | None = None
-_cli_checked = False
 
-
+@functools.cache
 def get_claude_cli_path() -> str | None:
-    """Find the claude CLI binary, caching the result."""
-    global _cached_cli_path, _cli_checked
-    if _cli_checked:
-        return _cached_cli_path
-
+    """Find the claude CLI binary. Cached for the process lifetime."""
     candidates = [
         str(Path.home() / ".claude" / "local" / "claude"),
         "claude",
     ]
-
     for cmd in candidates:
         try:
             subprocess.run(
@@ -36,66 +30,69 @@ def get_claude_cli_path() -> str | None:
                 capture_output=True,
                 timeout=3,
             )
-            _cached_cli_path = cmd
-            _cli_checked = True
             return cmd
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             continue
-
-    _cli_checked = True
-    _cached_cli_path = None
     return None
 
 
 def _parse_cli_response(stdout: str) -> str:
     """Parse the JSON response from `claude -p --output-format json`."""
-    parsed = json.loads(stdout)
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Claude CLI returned non-JSON: {exc}") from exc
+
     if parsed.get("is_error"):
         raise RuntimeError(f"Claude CLI error: {parsed.get('result', 'unknown error')}")
 
-    text = parsed.get("result", "")
-    return _strip_code_fences(text)
+    return _strip_code_fences(parsed.get("result", ""))
 
 
 def _strip_code_fences(text: str) -> str:
     """Strip markdown code fences from response."""
     text = text.strip()
-    if text.startswith("```"):
-        try:
-            first_nl = text.index("\n")
-            last_fence = text.rfind("```")
-            if last_fence > first_nl:
-                return text[first_nl + 1 : last_fence].strip()
-        except ValueError:
-            pass
+    if not text.startswith("```"):
+        return text
+    try:
+        first_nl = text.index("\n")
+        last_fence = text.rfind("```")
+        if last_fence > first_nl:
+            return text[first_nl + 1 : last_fence].strip()
+    except ValueError:
+        pass
     return text
 
 
 def _build_args(
     cli: str,
     *,
-    model: str = "haiku",
-    system_prompt: str = "",
-    tools: str = "",
-    max_budget: float = 1.0,
+    model: str,
+    system_prompt: str,
+    tools: str,
+    max_budget: float,
 ) -> list[str]:
-    """Build the CLI argument list."""
     args = [
         cli,
         "-p",
-        "--model",
-        model,
-        "--output-format",
-        "json",
+        "--model", model,
+        "--output-format", "json",
         "--no-session-persistence",
-        "--tools",
-        tools,
-        "--max-budget-usd",
-        str(max_budget),
+        "--tools", tools,
+        "--max-budget-usd", str(max_budget),
     ]
     if system_prompt:
         args.extend(["--system-prompt", system_prompt])
     return args
+
+
+def _require_cli() -> str:
+    cli = get_claude_cli_path()
+    if not cli:
+        raise RuntimeError(
+            "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"
+        )
+    return cli
 
 
 def call_claude_sync(
@@ -105,24 +102,21 @@ def call_claude_sync(
     model: str = "haiku",
     tools: str = "",
     timeout: int = 180,
+    max_budget: float = 1.0,
 ) -> str:
     """Call Claude CLI synchronously. Returns the text response."""
-    cli = get_claude_cli_path()
-    if not cli:
-        raise RuntimeError(
-            "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"
-        )
-
-    args = _build_args(cli, model=model, system_prompt=system_prompt, tools=tools)
+    cli = _require_cli()
+    args = _build_args(
+        cli, model=model, system_prompt=system_prompt, tools=tools, max_budget=max_budget,
+    )
     logger.debug("Claude CLI call: model=%s tools=%r", model, tools)
 
-    result = subprocess.run(
-        args,
-        input=user_message,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    try:
+        result = subprocess.run(
+            args, input=user_message, capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Claude CLI call timed out") from exc
 
     stdout = result.stdout.strip()
     if result.returncode != 0 and not stdout:
@@ -140,15 +134,13 @@ async def call_claude_async(
     model: str = "haiku",
     tools: str = "",
     timeout: int = 180,
+    max_budget: float = 1.0,
 ) -> str:
     """Call Claude CLI asynchronously. Returns the text response."""
-    cli = get_claude_cli_path()
-    if not cli:
-        raise RuntimeError(
-            "Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code"
-        )
-
-    args = _build_args(cli, model=model, system_prompt=system_prompt, tools=tools)
+    cli = _require_cli()
+    args = _build_args(
+        cli, model=model, system_prompt=system_prompt, tools=tools, max_budget=max_budget,
+    )
     logger.debug("Claude CLI async call: model=%s tools=%r", model, tools)
 
     proc = await asyncio.create_subprocess_exec(
@@ -163,10 +155,10 @@ async def call_claude_async(
             proc.communicate(user_message.encode()),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
         proc.kill()
         await proc.wait()
-        raise RuntimeError("Claude CLI call timed out")
+        raise RuntimeError("Claude CLI call timed out") from exc
 
     stdout = stdout_bytes.decode().strip()
     if proc.returncode != 0 and not stdout:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import signal
 import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -23,23 +23,41 @@ console = Console()
 
 @app.command()
 def analyze(
-    video_path: Annotated[Path, typer.Argument(help="Path to video file", exists=True)],
-    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output file path")] = None,
-    format: Annotated[str, typer.Option("--format", "-f", help="Output format: md, json, txt")] = "md",
-    scene_threshold: Annotated[float, typer.Option(help="Scene detection threshold (0.05-0.9)")] = 0.3,
-    max_keyframes: Annotated[int, typer.Option(help="Maximum keyframes to extract")] = 20,
-    whisper_model: Annotated[str, typer.Option(help="Whisper model: tiny, base, small, medium, large")] = "medium",
-    audio_only: Annotated[bool, typer.Option("--audio-only", "-a", help="Skip video keyframes, analyze audio/transcript only")] = False,
-    detail: Annotated[bool, typer.Option("--detail", "-d", help="Exhaustive knowledge extraction instead of summary")] = False,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show cost estimate without running")] = False,
+    video_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to video file", exists=True, file_okay=True, dir_okay=False
+        ),
+    ],
+    output: Annotated[
+        Path | None, typer.Option("--output", "-o", help="Output file path")
+    ] = None,
+    format: Annotated[
+        str, typer.Option("--format", "-f", help="Output format: md, json, txt")
+    ] = "md",
+    scene_threshold: Annotated[
+        float, typer.Option(help="Scene detection threshold (0.05-0.9)")
+    ] = 0.3,
+    max_keyframes: Annotated[
+        int, typer.Option(help="Maximum keyframes to extract")
+    ] = 20,
+    whisper_model: Annotated[
+        str, typer.Option(help="Whisper model: tiny, base, small, medium, large")
+    ] = "medium",
+    audio_only: Annotated[
+        bool,
+        typer.Option("--audio-only", "-a", help="Skip video keyframes, analyze audio/transcript only"),
+    ] = False,
+    detail: Annotated[
+        bool,
+        typer.Option("--detail", "-d", help="Exhaustive knowledge extraction instead of summary"),
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show cost estimate without running")
+    ] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
 ) -> None:
     """Analyze a video file using audio transcription + keyframe vision AI."""
-    # Validate video file
-    if not video_path.is_file():
-        console.print(f"[red]File not found: {video_path}[/red]")
-        raise typer.Exit(1)
-
     settings = load_settings(
         scene_threshold=scene_threshold,
         max_keyframes=max_keyframes,
@@ -52,10 +70,9 @@ def analyze(
 
     pipeline = Pipeline(settings)
 
-    # Handle Ctrl+C gracefully
     def _signal_handler(sig, frame):
         console.print("\n[yellow]Interrupted — cleaning up...[/yellow]")
-        pipeline._cleanup()
+        pipeline.cleanup()
         sys.exit(1)
 
     signal.signal(signal.SIGINT, _signal_handler)
@@ -75,14 +92,12 @@ def analyze(
 
     summary = result.data
 
-    # Write output
     if output:
         output.write_text(summary.summary_text)
         console.print(f"\n[green]Summary written to {output}[/green]")
     else:
         console.print("\n" + summary.summary_text)
 
-    # Stats
     console.print(f"\n[dim]Transcript segments: {summary.transcript_segments}[/dim]")
     console.print(f"[dim]Keyframes analyzed: {summary.keyframes_analyzed}[/dim]")
     console.print(f"[dim]Pipeline duration: {result.duration_ms:.0f}ms[/dim]")

@@ -4,13 +4,10 @@ version = "0.1.0"
 description = "Hybrid video analysis tool — audio transcription + keyframe vision + AI summarization"
 requires-python = ">=3.12"
 dependencies = [
-    "anthropic>=0.40.0",
     "openai-whisper>=20240930",
-    "ffmpeg-python>=0.2.0",
     "typer[all]>=0.12.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    "Pillow>=10.0.0",
     "rich>=13.0.0",
 ]
 

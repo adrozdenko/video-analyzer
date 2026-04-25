@@ -15,159 +15,168 @@ from video_analyzer.types import (
 )
 from video_analyzer.utils.claude_cli import call_claude_sync
 
+STAGE = "summarizer"
 
-class Summarizer:
-    """Generates a structured summary from the unified timeline."""
 
-    def summarize(
-        self,
-        video: VideoMetadata,
-        timeline: list[TimelineEntry],
-        output_format: OutputFormat = OutputFormat.MARKDOWN,
-        detail_mode: DetailMode = DetailMode.SUMMARY,
-    ) -> StageResult[AnalysisSummary]:
-        start = time.perf_counter()
+def summarize(
+    video: VideoMetadata,
+    timeline: list[TimelineEntry],
+    output_format: OutputFormat = OutputFormat.MARKDOWN,
+    detail_mode: DetailMode = DetailMode.SUMMARY,
+) -> StageResult[AnalysisSummary]:
+    start = time.perf_counter()
 
-        if not timeline:
+    if not timeline:
+        return StageResult.fail(
+            stage=STAGE,
+            error="No timeline entries to summarize",
+            duration_ms=(time.perf_counter() - start) * 1000,
+        )
+
+    transcript_count = sum(1 for e in timeline if e.transcript)
+    visual_count = sum(1 for e in timeline if e.visual)
+    timeline_text = _format_timeline_for_prompt(timeline)
+
+    try:
+        summary_text = _call_claude(video, timeline_text, output_format, detail_mode)
+    except (RuntimeError, OSError) as e:
+        summary_text = _fallback_summary(video, timeline, output_format)
+        if not summary_text:
             return StageResult.fail(
-                stage="summarizer",
-                error="No timeline entries to summarize",
+                stage=STAGE,
+                error=f"Claude API failed and fallback produced no output: {e}",
                 duration_ms=(time.perf_counter() - start) * 1000,
             )
 
-        transcript_count = sum(1 for e in timeline if e.transcript)
-        visual_count = sum(1 for e in timeline if e.visual)
+    summary_text = _append_timeline_appendix(summary_text, timeline, output_format)
 
-        # Build timeline text for the prompt
-        timeline_text = self._format_timeline_for_prompt(timeline)
+    result = AnalysisSummary(
+        video=video,
+        timeline=timeline,
+        summary_text=summary_text,
+        transcript_segments=transcript_count,
+        keyframes_analyzed=visual_count,
+        format=output_format,
+    )
+    return StageResult.success(
+        stage=STAGE,
+        data=result,
+        duration_ms=(time.perf_counter() - start) * 1000,
+    )
 
-        try:
-            summary_text = self._call_claude(video, timeline_text, output_format, detail_mode)
-        except Exception as e:
-            # Fallback: produce raw timeline as output
-            summary_text = self._fallback_summary(video, timeline, output_format)
-            if not summary_text:
-                return StageResult.fail(
-                    stage="summarizer",
-                    error=f"Claude API failed and fallback produced no output: {e}",
-                    duration_ms=(time.perf_counter() - start) * 1000,
-                )
 
-        summary_text = self._append_timeline_appendix(summary_text, timeline, output_format)
+def _format_timeline_for_prompt(timeline: list[TimelineEntry]) -> str:
+    lines: list[str] = []
+    for entry in timeline:
+        ts = _fmt_time(entry.timestamp)
+        parts: list[str] = [f"[{ts}]"]
+        if entry.transcript:
+            parts.append(f'Speech: "{entry.transcript}"')
+        if entry.visual:
+            parts.append(f"Visual: {entry.visual}")
+        if entry.objects:
+            parts.append(f"Objects: {', '.join(entry.objects)}")
+        if entry.text_detected:
+            parts.append(f"On-screen text: {entry.text_detected}")
+        lines.append(" | ".join(parts))
+    return "\n".join(lines)
 
-        result = AnalysisSummary(
-            video=video,
-            timeline=timeline,
-            summary_text=summary_text,
-            transcript_segments=transcript_count,
-            keyframes_analyzed=visual_count,
-            format=output_format,
-        )
 
-        duration_ms = (time.perf_counter() - start) * 1000
-        return StageResult.success(stage="summarizer", data=result, duration_ms=duration_ms)
+def _append_timeline_appendix(
+    summary_text: str,
+    timeline: list[TimelineEntry],
+    output_format: OutputFormat,
+) -> str:
+    """Append raw timeline evidence so visual analysis is always surfaced."""
+    if output_format == OutputFormat.JSON:
+        return _append_json_timeline(summary_text, timeline)
+    if output_format == OutputFormat.TEXT:
+        return summary_text.rstrip() + "\n\n" + _render_text_timeline_appendix(timeline)
+    return summary_text.rstrip() + "\n\n" + _render_markdown_timeline_appendix(timeline)
 
-    def _format_timeline_for_prompt(self, timeline: list[TimelineEntry]) -> str:
-        lines: list[str] = []
-        for entry in timeline:
-            ts = _fmt_time(entry.timestamp)
-            parts: list[str] = [f"[{ts}]"]
-            if entry.transcript:
-                parts.append(f'Speech: "{entry.transcript}"')
-            if entry.visual:
-                parts.append(f"Visual: {entry.visual}")
-            if entry.objects:
-                parts.append(f"Objects: {', '.join(entry.objects)}")
-            if entry.text_detected:
-                parts.append(f"On-screen text: {entry.text_detected}")
-            lines.append(" | ".join(parts))
-        return "\n".join(lines)
 
-    def _append_timeline_appendix(
-        self,
-        summary_text: str,
-        timeline: list[TimelineEntry],
-        output_format: OutputFormat,
-    ) -> str:
-        """Append raw timeline evidence so visual analysis is always surfaced."""
-        if output_format == OutputFormat.JSON:
-            return self._append_json_timeline(summary_text, timeline)
-        if output_format == OutputFormat.TEXT:
-            return summary_text.rstrip() + "\n\n" + self._render_text_timeline_appendix(timeline)
-        return summary_text.rstrip() + "\n\n" + self._render_markdown_timeline_appendix(timeline)
+def _append_json_timeline(summary_text: str, timeline: list[TimelineEntry]) -> str:
+    try:
+        payload = json.loads(summary_text)
+    except json.JSONDecodeError:
+        payload = {"summary": summary_text}
 
-    def _append_json_timeline(self, summary_text: str, timeline: list[TimelineEntry]) -> str:
-        try:
-            payload = json.loads(summary_text)
-        except json.JSONDecodeError:
-            payload = {"summary": summary_text}
+    payload["timeline_evidence"] = [
+        {
+            "timestamp": _fmt_time(entry.timestamp),
+            "end_timestamp": (
+                _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None
+            ),
+            "transcript": entry.transcript,
+            "visual": entry.visual,
+            "objects": entry.objects,
+            "text_detected": entry.text_detected,
+        }
+        for entry in timeline
+    ]
+    return json.dumps(payload, indent=2)
 
-        payload["timeline_evidence"] = [
-            {
-                "timestamp": _fmt_time(entry.timestamp),
-                "end_timestamp": _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None,
-                "transcript": entry.transcript,
-                "visual": entry.visual,
-                "objects": entry.objects,
-                "text_detected": entry.text_detected,
-            }
-            for entry in timeline
-        ]
-        return json.dumps(payload, indent=2)
 
-    def _render_markdown_timeline_appendix(self, timeline: list[TimelineEntry]) -> str:
-        lines = ["## Timeline Evidence", ""]
-        for entry in timeline:
-            ts = _fmt_time(entry.timestamp)
-            end_ts = _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None
-            heading = f"### [{ts}-{end_ts}]" if end_ts else f"### [{ts}]"
-            lines.append(heading)
-            if entry.transcript:
-                lines.append(f"**Speech:** {entry.transcript}")
-            if entry.visual:
-                lines.append(f"**Visual:** {entry.visual}")
-            if entry.objects:
-                lines.append(f"**Objects:** {', '.join(entry.objects)}")
-            if entry.text_detected:
-                lines.append(f"**On-screen text:** {entry.text_detected}")
-            lines.append("")
-        return "\n".join(lines).rstrip()
+def _render_markdown_timeline_appendix(timeline: list[TimelineEntry]) -> str:
+    lines = ["## Timeline Evidence", ""]
+    for entry in timeline:
+        ts = _fmt_time(entry.timestamp)
+        end_ts = _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None
+        heading = f"### [{ts}-{end_ts}]" if end_ts else f"### [{ts}]"
+        lines.append(heading)
+        if entry.transcript:
+            lines.append(f"**Speech:** {entry.transcript}")
+        if entry.visual:
+            lines.append(f"**Visual:** {entry.visual}")
+        if entry.objects:
+            lines.append(f"**Objects:** {', '.join(entry.objects)}")
+        if entry.text_detected:
+            lines.append(f"**On-screen text:** {entry.text_detected}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
-    def _render_text_timeline_appendix(self, timeline: list[TimelineEntry]) -> str:
-        lines = ["Timeline Evidence", "=================", ""]
-        for entry in timeline:
-            ts = _fmt_time(entry.timestamp)
-            end_ts = _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None
-            heading = f"[{ts}-{end_ts}]" if end_ts else f"[{ts}]"
-            lines.append(heading)
-            if entry.transcript:
-                lines.append(f"Speech: {entry.transcript}")
-            if entry.visual:
-                lines.append(f"Visual: {entry.visual}")
-            if entry.objects:
-                lines.append(f"Objects: {', '.join(entry.objects)}")
-            if entry.text_detected:
-                lines.append(f"On-screen text: {entry.text_detected}")
-            lines.append("")
-        return "\n".join(lines).rstrip()
 
-    def _call_claude(
-        self,
-        video: VideoMetadata,
-        timeline_text: str,
-        output_format: OutputFormat,
-        detail_mode: DetailMode = DetailMode.SUMMARY,
-    ) -> str:
-        format_instruction = {
-            OutputFormat.MARKDOWN: "Format your response as clean Markdown with headers.",
-            OutputFormat.JSON: "Format your response as a JSON object with keys: overview, key_moments (array), visual_content, transcript_highlights.",
-            OutputFormat.TEXT: "Format your response as plain text with clear sections.",
-        }[output_format]
+def _render_text_timeline_appendix(timeline: list[TimelineEntry]) -> str:
+    lines = ["Timeline Evidence", "=================", ""]
+    for entry in timeline:
+        ts = _fmt_time(entry.timestamp)
+        end_ts = _fmt_time(entry.end_timestamp) if entry.end_timestamp is not None else None
+        heading = f"[{ts}-{end_ts}]" if end_ts else f"[{ts}]"
+        lines.append(heading)
+        if entry.transcript:
+            lines.append(f"Speech: {entry.transcript}")
+        if entry.visual:
+            lines.append(f"Visual: {entry.visual}")
+        if entry.objects:
+            lines.append(f"Objects: {', '.join(entry.objects)}")
+        if entry.text_detected:
+            lines.append(f"On-screen text: {entry.text_detected}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
-        video_info = f"Video info: {video.duration_seconds:.0f}s duration, {video.width}x{video.height}, {video.codec}"
 
-        if detail_mode == DetailMode.DETAILED:
-            prompt = f"""Analyze this video timeline and extract ALL knowledge in exhaustive detail.
+def _call_claude(
+    video: VideoMetadata,
+    timeline_text: str,
+    output_format: OutputFormat,
+    detail_mode: DetailMode,
+) -> str:
+    format_instruction = {
+        OutputFormat.MARKDOWN: "Format your response as clean Markdown with headers.",
+        OutputFormat.JSON: (
+            "Format your response as a JSON object with keys: "
+            "overview, key_moments (array), visual_content, transcript_highlights."
+        ),
+        OutputFormat.TEXT: "Format your response as plain text with clear sections.",
+    }[output_format]
+
+    video_info = (
+        f"Video info: {video.duration_seconds:.0f}s duration, "
+        f"{video.width}x{video.height}, {video.codec}"
+    )
+
+    if detail_mode == DetailMode.DETAILED:
+        prompt = f"""Analyze this video timeline and extract ALL knowledge in exhaustive detail.
 
 {video_info}
 
@@ -188,8 +197,8 @@ Extract EVERYTHING from this video with maximum detail. Include:
 Be exhaustive. Include every detail. Do NOT summarize or condense — extract ALL information.
 
 {format_instruction}"""
-        else:
-            prompt = f"""Analyze this video timeline and produce a comprehensive summary.
+    else:
+        prompt = f"""Analyze this video timeline and produce a comprehensive summary.
 
 {video_info}
 
@@ -206,50 +215,52 @@ Be concise. No extra commentary beyond what is asked.
 
 {format_instruction}"""
 
-        return call_claude_sync(prompt, model="haiku")
+    return call_claude_sync(prompt, model="haiku")
 
-    def _fallback_summary(
-        self,
-        video: VideoMetadata,
-        timeline: list[TimelineEntry],
-        output_format: OutputFormat,
-    ) -> str:
-        """Produce a raw timeline dump when Claude API is unavailable."""
-        if output_format == OutputFormat.JSON:
-            data = {
-                "overview": f"Video analysis of {video.path.name} ({video.duration_seconds:.0f}s)",
-                "key_moments": [
-                    {
-                        "time": _fmt_time(e.timestamp),
-                        "transcript": e.transcript,
-                        "visual": e.visual,
-                    }
-                    for e in timeline
-                ],
-                "note": "AI summarization unavailable — raw timeline data",
-            }
-            return json.dumps(data, indent=2)
 
-        lines: list[str] = []
-        lines.append(f"# Video Analysis: {video.path.name}")
-        lines.append(f"\nDuration: {video.duration_seconds:.0f}s | {video.width}x{video.height}")
-        lines.append("\n## Timeline\n")
+def _fallback_summary(
+    video: VideoMetadata,
+    timeline: list[TimelineEntry],
+    output_format: OutputFormat,
+) -> str:
+    """Produce a raw timeline dump when Claude API is unavailable."""
+    if output_format == OutputFormat.JSON:
+        data = {
+            "overview": (
+                f"Video analysis of {video.path.name} ({video.duration_seconds:.0f}s)"
+            ),
+            "key_moments": [
+                {
+                    "time": _fmt_time(e.timestamp),
+                    "transcript": e.transcript,
+                    "visual": e.visual,
+                }
+                for e in timeline
+            ],
+            "note": "AI summarization unavailable — raw timeline data",
+        }
+        return json.dumps(data, indent=2)
 
-        for entry in timeline:
-            ts = _fmt_time(entry.timestamp)
-            lines.append(f"### [{ts}]")
-            if entry.transcript:
-                lines.append(f"**Speech:** {entry.transcript}")
-            if entry.visual:
-                lines.append(f"**Visual:** {entry.visual}")
-            if entry.objects:
-                lines.append(f"**Objects:** {', '.join(entry.objects)}")
-            if entry.text_detected:
-                lines.append(f"**On-screen text:** {entry.text_detected}")
-            lines.append("")
+    lines: list[str] = [
+        f"# Video Analysis: {video.path.name}",
+        f"\nDuration: {video.duration_seconds:.0f}s | {video.width}x{video.height}",
+        "\n## Timeline\n",
+    ]
+    for entry in timeline:
+        ts = _fmt_time(entry.timestamp)
+        lines.append(f"### [{ts}]")
+        if entry.transcript:
+            lines.append(f"**Speech:** {entry.transcript}")
+        if entry.visual:
+            lines.append(f"**Visual:** {entry.visual}")
+        if entry.objects:
+            lines.append(f"**Objects:** {', '.join(entry.objects)}")
+        if entry.text_detected:
+            lines.append(f"**On-screen text:** {entry.text_detected}")
+        lines.append("")
 
-        lines.append("\n---\n*AI summarization unavailable — raw timeline data*")
-        return "\n".join(lines)
+    lines.append("\n---\n*AI summarization unavailable — raw timeline data*")
+    return "\n".join(lines)
 
 
 def _fmt_time(seconds: float) -> str:
