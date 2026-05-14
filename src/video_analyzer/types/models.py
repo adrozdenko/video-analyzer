@@ -96,3 +96,8 @@ class AnalysisSummary(BaseModel):
     transcript_segments: int
     keyframes_analyzed: int
     format: OutputFormat = OutputFormat.MARKDOWN
+
+    def save(self, path: Path) -> None:
+        """Write summary_text to a file, creating parent directories as needed."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.summary_text, encoding="utf-8")

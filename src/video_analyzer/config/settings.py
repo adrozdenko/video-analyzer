@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -22,10 +21,6 @@ class DetailMode(str, Enum):
     DETAILED = "detailed"
 
 
-class VisionProvider(str, Enum):
-    CLAUDE = "claude"
-
-
 class Settings(BaseSettings):
     """Loaded from environment variables and .env file."""
 
@@ -35,7 +30,6 @@ class Settings(BaseSettings):
     whisper_model: WhisperModel = WhisperModel.MEDIUM
 
     # Vision
-    vision_provider: VisionProvider = VisionProvider.CLAUDE
     vision_concurrency: int = Field(default=3, ge=1, le=10)
 
     # Extraction

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import signal
+import sys
 import tempfile
 from pathlib import Path
 
@@ -26,6 +28,16 @@ class Pipeline:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._tmp_dir: Path | None = None
+        self._register_signals()
+
+    def _register_signals(self) -> None:
+        def _handler(sig, frame):
+            console.print("\n[yellow]Interrupted — cleaning up...[/yellow]")
+            self.cleanup()
+            sys.exit(1)
+
+        signal.signal(signal.SIGINT, _handler)
+        signal.signal(signal.SIGTERM, _handler)
 
     def run(self, video_path: Path) -> StageResult[AnalysisSummary]:
         """Run the full pipeline synchronously (uses asyncio internally for vision)."""

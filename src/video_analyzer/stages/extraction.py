@@ -85,10 +85,29 @@ def probe_video(video_path: Path) -> StageResult[VideoMetadata]:
         video_stream = next(
             (s for s in streams if s.get("codec_type") == "video"), None
         )
-        if video_stream is None:
+        audio_stream = next(
+            (s for s in streams if s.get("codec_type") == "audio"), None
+        )
+
+        if video_stream is None and audio_stream is None:
             return StageResult.fail(
-                STAGE_PROBE, "No video stream found", duration_ms=_elapsed(t0)
+                STAGE_PROBE, "No video or audio stream found", duration_ms=_elapsed(t0)
             )
+
+        if video_stream is None:
+            # Audio-only file (MP3, WAV, M4A, etc.) — valid input, skip keyframes
+            duration = float(fmt.get("duration") or audio_stream.get("duration") or 0)
+            metadata = VideoMetadata(
+                path=video_path,
+                duration_seconds=duration,
+                width=0,
+                height=0,
+                fps=0.0,
+                has_audio=True,
+                codec=audio_stream.get("codec_name", "audio"),
+                file_size_bytes=int(fmt.get("size", 0)),
+            )
+            return StageResult.success(STAGE_PROBE, metadata, duration_ms=_elapsed(t0))
 
         has_audio = any(s.get("codec_type") == "audio" for s in streams)
         duration = float(
@@ -141,6 +160,14 @@ def extract_audio(video_path: Path, output_dir: Path) -> StageResult[Path]:
             return StageResult.skipped(STAGE_AUDIO, "Video contains no audio stream")
 
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        if probe.data.width == 0:
+            # Audio-only input — skip re-encoding, copy to output dir as-is
+            dest = output_dir / video_path.name
+            if dest != video_path:
+                shutil.copy2(video_path, dest)
+            return StageResult.success(STAGE_AUDIO, dest, duration_ms=_elapsed(t0))
+
         output_path = output_dir / f"{video_path.stem}.mp3"
 
         cmd = [
@@ -206,6 +233,9 @@ def extract_keyframes(
                 f"Cannot probe video: {probe.error}",
                 duration_ms=_elapsed(t0),
             )
+
+        if probe.data.width == 0:
+            return StageResult.skipped(STAGE_KEYFRAME, "Audio-only file, no video frames to extract")
 
         output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import signal
-import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +10,8 @@ from rich.console import Console
 
 from video_analyzer.config.settings import DetailMode, WhisperModel, load_settings
 from video_analyzer.pipeline import Pipeline
+
+_FORMAT_EXT = {"md": ".md", "json": ".json", "txt": ".txt"}
 
 app = typer.Typer(
     name="video-analyzer",
@@ -70,14 +70,6 @@ def analyze(
 
     pipeline = Pipeline(settings)
 
-    def _signal_handler(sig, frame):
-        console.print("\n[yellow]Interrupted — cleaning up...[/yellow]")
-        pipeline.cleanup()
-        sys.exit(1)
-
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
-
     if dry_run:
         pipeline.dry_run(video_path)
         return
@@ -93,7 +85,7 @@ def analyze(
     summary = result.data
 
     if output:
-        output.write_text(summary.summary_text)
+        summary.save(output)
         console.print(f"\n[green]Summary written to {output}[/green]")
     else:
         console.print("\n" + summary.summary_text)
@@ -101,6 +93,87 @@ def analyze(
     console.print(f"\n[dim]Transcript segments: {summary.transcript_segments}[/dim]")
     console.print(f"[dim]Keyframes analyzed: {summary.keyframes_analyzed}[/dim]")
     console.print(f"[dim]Pipeline duration: {result.duration_ms:.0f}ms[/dim]")
+
+
+@app.command()
+def batch(
+    patterns: Annotated[
+        list[str],
+        typer.Argument(help="File paths or glob patterns (e.g. '*.mp4' 'clips/*.mov')"),
+    ],
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", "-O", help="Directory to save output files"),
+    ] = None,
+    format: Annotated[
+        str, typer.Option("--format", "-f", help="Output format: md, json, txt")
+    ] = "md",
+    whisper_model: Annotated[
+        str, typer.Option(help="Whisper model: tiny, base, small, medium, large")
+    ] = "medium",
+    audio_only: Annotated[
+        bool, typer.Option("--audio-only", "-a", help="Skip keyframe extraction")
+    ] = False,
+    detail: Annotated[
+        bool, typer.Option("--detail", "-d", help="Exhaustive knowledge extraction")
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
+) -> None:
+    """Analyze multiple video files by path or glob pattern."""
+    files: list[Path] = []
+    for pattern in patterns:
+        p = Path(pattern)
+        if p.exists() and p.is_file():
+            files.append(p)
+        else:
+            matched = sorted(Path().glob(pattern))
+            if not matched:
+                console.print(f"[yellow]No files matched: {pattern}[/yellow]")
+            files.extend(f for f in matched if f.is_file())
+
+    if not files:
+        console.print("[red]No files to process.[/red]")
+        raise typer.Exit(1)
+
+    settings = load_settings(
+        whisper_model=WhisperModel(whisper_model),
+        audio_only=audio_only,
+        output_format=format,
+        detail_mode=DetailMode.DETAILED if detail else DetailMode.SUMMARY,
+        verbose=verbose,
+    )
+    ext = _FORMAT_EXT.get(format, ".md")
+    pipeline = Pipeline(settings)
+
+    passed = failed = 0
+    console.print(f"\n[bold]Batch: {len(files)} file(s)[/bold]\n")
+
+    for i, video_path in enumerate(files, 1):
+        console.print(f"[bold][{i}/{len(files)}][/bold] {video_path.name}")
+        result = pipeline.run(video_path)
+
+        if not result.ok:
+            console.print(f"  [red]Failed: {result.error}[/red]")
+            failed += 1
+            continue
+
+        summary = result.data
+        if output_dir:
+            out_path = output_dir / f"{video_path.stem}{ext}"
+            summary.save(out_path)
+            console.print(f"  [green]Saved → {out_path}[/green]")
+        else:
+            console.print("\n" + summary.summary_text)
+
+        console.print(
+            f"  [dim]{summary.transcript_segments} segments, "
+            f"{summary.keyframes_analyzed} keyframes, {result.duration_ms:.0f}ms[/dim]"
+        )
+        passed += 1
+
+    console.print(f"\n[bold]Done:[/bold] {passed} succeeded, {failed} failed\n")
+    if failed:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
