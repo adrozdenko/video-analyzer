@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     whisper_model: WhisperModel = WhisperModel.MEDIUM
 
     # Vision
+    vision_model: str = "haiku"
     vision_concurrency: int = Field(default=3, ge=1, le=10)
 
     # Extraction
@@ -49,6 +50,8 @@ class Settings(BaseSettings):
 
 def load_settings(**overrides: object) -> Settings:
     """Load settings from .env, then apply CLI overrides."""
-    # Filter out None values so defaults from .env aren't overridden
     clean = {k: v for k, v in overrides.items() if v is not None}
+    # Auto-elevate vision model for detail mode unless caller set it explicitly
+    if clean.get("detail_mode") == DetailMode.DETAILED and "vision_model" not in clean:
+        clean["vision_model"] = "sonnet"
     return Settings(**clean)

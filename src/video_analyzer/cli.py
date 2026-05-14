@@ -44,6 +44,10 @@ def analyze(
     whisper_model: Annotated[
         str, typer.Option(help="Whisper model: tiny, base, small, medium, large")
     ] = "medium",
+    vision_model: Annotated[
+        str | None,
+        typer.Option("--vision-model", help="Claude model for keyframes: haiku, sonnet, opus"),
+    ] = None,
     audio_only: Annotated[
         bool,
         typer.Option("--audio-only", "-a", help="Skip video keyframes, analyze audio/transcript only"),
@@ -62,6 +66,7 @@ def analyze(
         scene_threshold=scene_threshold,
         max_keyframes=max_keyframes,
         whisper_model=WhisperModel(whisper_model),
+        vision_model=vision_model,
         audio_only=audio_only,
         output_format=format,
         detail_mode=DetailMode.DETAILED if detail else DetailMode.SUMMARY,
@@ -111,6 +116,10 @@ def batch(
     whisper_model: Annotated[
         str, typer.Option(help="Whisper model: tiny, base, small, medium, large")
     ] = "medium",
+    vision_model: Annotated[
+        str | None,
+        typer.Option("--vision-model", help="Claude model for keyframes: haiku, sonnet, opus"),
+    ] = None,
     audio_only: Annotated[
         bool, typer.Option("--audio-only", "-a", help="Skip keyframe extraction")
     ] = False,
@@ -137,6 +146,7 @@ def batch(
 
     settings = load_settings(
         whisper_model=WhisperModel(whisper_model),
+        vision_model=vision_model,
         audio_only=audio_only,
         output_format=format,
         detail_mode=DetailMode.DETAILED if detail else DetailMode.SUMMARY,

@@ -135,10 +135,16 @@ class Pipeline:
                 )
             self._log_stage(progress, task_tr, "Transcript", transcript_result)
 
-            task_vis = progress.add_task("Analyzing keyframes (Claude)...", total=None)
+            task_vis = progress.add_task(
+                f"Analyzing keyframes (claude-{self.settings.vision_model})...", total=None
+            )
             if kf_result.ok and kf_result.data:
                 vision_result = asyncio.run(
-                    analyze_keyframes(kf_result.data, self.settings.vision_concurrency)
+                    analyze_keyframes(
+                        kf_result.data,
+                        self.settings.vision_concurrency,
+                        model=self.settings.vision_model,
+                    )
                 )
             else:
                 vision_result = StageResult.skipped(

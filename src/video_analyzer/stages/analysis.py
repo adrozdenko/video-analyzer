@@ -76,6 +76,7 @@ def transcribe(
 async def analyze_keyframes(
     keyframes: list[Keyframe],
     concurrency: int = 3,
+    model: str = "haiku",
 ) -> StageResult[list[VisualDescription]]:
     """Analyze keyframes using Claude vision via the claude CLI."""
     if not keyframes:
@@ -89,11 +90,12 @@ async def analyze_keyframes(
             duration_ms=(time.perf_counter() - start) * 1000,
         )
 
+    logger.info("Vision model: %s", model)
     semaphore = asyncio.Semaphore(concurrency)
 
     async def describe(kf: Keyframe) -> VisualDescription | None:
         async with semaphore:
-            return await _describe_keyframe(kf)
+            return await _describe_keyframe(kf, model=model)
 
     raw_results = await asyncio.gather(
         *(describe(kf) for kf in keyframes), return_exceptions=True
@@ -136,7 +138,7 @@ async def analyze_keyframes(
     )
 
 
-async def _describe_keyframe(keyframe: Keyframe) -> VisualDescription | None:
+async def _describe_keyframe(keyframe: Keyframe, model: str = "haiku") -> VisualDescription | None:
     if not keyframe.path.exists():
         logger.warning("Keyframe image not found: %s", keyframe.path)
         return None
@@ -146,7 +148,7 @@ async def _describe_keyframe(keyframe: Keyframe) -> VisualDescription | None:
 
     prompt = f"Use the Read tool to view the image at {keyframe.path}. Then analyze it."
     raw_text = await call_claude_async(
-        prompt, system_prompt=VISION_PROMPT, model="haiku", tools="Read",
+        prompt, system_prompt=VISION_PROMPT, model=model, tools="Read",
     )
     return _parse_vision_response(raw_text, keyframe)
 
